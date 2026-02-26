@@ -67,6 +67,50 @@ async def create_team(region: str, team: TeamCreate):
         json.dump(data, f, ensure_ascii=False, indent=2)
     return {"Message": "Team added succesfully", "Team": new_team}
 
+@app.delete("/rankings/{region}/{team_name}")
+async def delete_team(region: str, team_name: str):
+    filename = f"rankings-{region}.json"
+    filepath = f"data/{filename}"
+    
+    if not os.path.exists(filepath):
+        return {"error": "Region not found"}
+    with open(filepath, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    # Создаем новый список, исключая команду с указанным именем
+    original_count = len(data["data"])
+    data["data"] = [t for t in data["data"] if t["team"]!= team_name]
+
+    if len(data["data"]) == original_count:
+        return {"error" : f"Team '{team_name}' not found"}
+    with open(filepath, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    return {"message" : f"Team '{team_name}' deleted successfuly"}
+
+@app.patch("/rankings/{region}/{team_name}")
+async def update_rank(region: str, team_name: str, new_rank: str):
+    filename = f"rankings-{region}.json"
+    filepath = f"data/{filename}"
+
+    if not os.path.exists(filepath):
+        return {"error" : "Region not found"}
+    with open(filepath, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    # Ищем команду и меняем ей ранг
+    found = False
+    for t in data["data"]:
+        if t["team"] == team_name:
+            t["rank"] = new_rank
+            found = True
+            break
+    if not found:
+        return{"error":"Team not found"}
+    
+    with open(filepath, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+    return {"message":f"Rank for {team_name} updated to {new_rank}"}
 
 if __name__=="__main__":
     import uvicorn
