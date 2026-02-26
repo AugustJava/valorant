@@ -1,10 +1,18 @@
 import os
 import json 
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from schemas import NewsCreate, TeamCreate
+import models, database, schemas
+from sqlalchemy.orm import Session
 
 app = FastAPI()
+
+def get_db():
+    db = database.SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
 # ЭТО ВАЖНО: Разрешаем фронтенду подключаться к нам
 app.add_middleware(
@@ -19,23 +27,17 @@ def load_json(filename: str):
         return json.load(f)
     
 @app.get("/news")
-async def get_news():
+async def get_news(news: schemas.NewsCreate):
     data = load_json("news.json")
     return data
 
-@app.get("/ranking/{region}")
-async def get_rankings(region: str):
-    # region будет принимать значения: eu, na, ap, br и т.д.
-    filename = f"rankings-{region}.json"
-    try:
-        data = load_json(filename)
-        return data
-    except FileNotFoundError:
-        return {"error":"Region not found"}
-    
+@app.get("/rankings/{region}")
+async def get_rankings(region: str, db: Session = Depends(get_db)):
+    teams = db.query(models.TeamModel).filter(models.TeamModel.region == region).all()
+    return teams
 
 @app.post("/news")
-async def create_news(news: NewsCreate):
+async def create_news(news: schemas.NewsCreate):
     # 1. Читаем текущий список новостей
     data = load_json("news.json")
 
@@ -50,67 +52,46 @@ async def create_news(news: NewsCreate):
     return {"Message": "News added succesfully", "news": new_post}
 
 @app.post("/rankings/{region}")
-async def create_team(region: str, team: TeamCreate):
-    filename = f"rankings-{region}.json"
-    filepath = f"data/{filename}"
-
-    # Проверяем, существует ли файл вообще
-    if not os.path.exists(filepath):
-        return {"error": f"Region '{region}' not found. Make sure data/{filename} exists"}
-    with open(filepath, "r", encoding="utf-8") as f:
-        data = json.load(f)
+async def create_team(region: str, team: schemas.TeamCreate, db: Session = Depends(get_db)):
+    # 1. Создаем объект модели из того, что прислал юзер
+    db_team = models.TeamModel(
+        **team.dict(), # "Распаковываем" все поля (rank, team и т.д.)
+        region=region  # Добавляем регион отдельно
+    )
     
-    new_team = team.dict()
-    data["data"].append(new_team)
-    # Записываем обратно
-    with open(filepath, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-    return {"Message": "Team added succesfully", "Team": new_team}
-
-@app.delete("/rankings/{region}/{team_name}")
-async def delete_team(region: str, team_name: str):
-    filename = f"rankings-{region}.json"
-    filepath = f"data/{filename}"
+    # 2. Сохраняем в базу
+    db.add(db_team)
+    db.commit() # Подтверждаем сохранение
+    db.refresh(db_team) # Обновляем объект, чтобы получить ID, который база дала сама
     
-    if not os.path.exists(filepath):
-        return {"error": "Region not found"}
-    with open(filepath, "r", encoding="utf-8") as f:
-        data = json.load(f)
+    return db_team
 
-    # Создаем новый список, исключая команду с указанным именем
-    original_count = len(data["data"])
-    data["data"] = [t for t in data["data"] if t["team"]!= team_name]
-
-    if len(data["data"]) == original_count:
-        return {"error" : f"Team '{team_name}' not found"}
-    with open(filepath, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-    return {"message" : f"Team '{team_name}' deleted successfuly"}
-
-@app.patch("/rankings/{region}/{team_name}")
-async def update_rank(region: str, team_name: str, new_rank: str):
-    filename = f"rankings-{region}.json"
-    filepath = f"data/{filename}"
-
-    if not os.path.exists(filepath):
-        return {"error" : "Region not found"}
-    with open(filepath, "r", encoding="utf-8") as f:
-        data = json.load(f)
-
-    # Ищем команду и меняем ей ранг
-    found = False
-    for t in data["data"]:
-        if t["team"] == team_name:
-            t["rank"] = new_rank
-            found = True
-            break
-    if not found:
-        return{"error":"Team not found"}
+@app.delete("/rankings/{team_id}")
+async def delete_team(team_id: int, db: Session = Depends(get_db)):
+    # Ищем команду в базе по ID
+    team = db.query(models.TeamModel).filter(models.TeamModel.id == team_id).first()
     
-    with open(filepath, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    if not team:
+        raise HTTPException(status_code=404, detail="Team not found")
+    
+    db.delete(team)
+    db.commit()
+    
+    return {"message": f"Team with ID {team_id} deleted"}
 
-    return {"message":f"Rank for {team_name} updated to {new_rank}"}
+@app.patch("/rankings/{team_id}")
+async def update_rank(team_id: int, new_rank: str, db: Session = Depends(get_db)):
+    team = db.query(models.TeamModel).filter(models.TeamModel.id == team_id).first()
+    
+
+    if not team:
+        raise HTTPException(status_code=404, detail="Team not found")
+    
+    team.rank = new_rank
+    db.commit()
+    db.refresh()
+    return {"message": f"Rank for team {team.team} (ID: {team_id}) updated to {new_rank}"}
+
 
 if __name__=="__main__":
     import uvicorn
