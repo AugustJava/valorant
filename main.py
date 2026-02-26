@@ -1,6 +1,8 @@
+import os
 import json 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from schemas import NewsCreate, TeamCreate
 
 app = FastAPI()
 
@@ -30,6 +32,42 @@ async def get_rankings(region: str):
         return data
     except FileNotFoundError:
         return {"error":"Region not found"}
+    
+
+@app.post("/news")
+async def create_news(news: NewsCreate):
+    # 1. Читаем текущий список новостей
+    data = load_json("news.json")
+
+    # 2. Превращаем присланную новость в словарь и добавляем в список
+    # (у тебя в JSON новости лежат в ключе "segments")
+    new_post = news.dict()
+    data["data"]["segments"].append(new_post)
+
+    # 3. Сохраняем обновленный список обратно в файл
+    with open("data/news.json", "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    return {"Message": "News added succesfully", "news": new_post}
+
+@app.post("/rankings/{region}")
+async def create_team(region: str, team: TeamCreate):
+    filename = f"rankings-{region}.json"
+    filepath = f"data/{filename}"
+
+    # Проверяем, существует ли файл вообще
+    if not os.path.exists(filepath):
+        return {"error": f"Region '{region}' not found. Make sure data/{filename} exists"}
+    with open(filepath, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    
+    new_team = team.dict()
+    data["data"].append(new_team)
+    # Записываем обратно
+    with open(filepath, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    return {"Message": "Team added succesfully", "Team": new_team}
+
+
 if __name__=="__main__":
     import uvicorn
     uvicorn.run(app, host="127.0.0.1", port=8000)
